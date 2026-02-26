@@ -3,7 +3,7 @@
 namespace ZTrippete\JwtVerifier;
 
 /**
- * @param string|null $tokenString
+ * @param string $tokenString
  * @param string $jwksUrl
  * @param string $issuer
  * @param string $audience
@@ -12,7 +12,7 @@ namespace ZTrippete\JwtVerifier;
 class VerifyRequest
 {
     public function __construct(
-        readonly ?string $tokenString,
+        readonly string $tokenString,
         readonly string $jwksUrl,
         readonly string $issuer,
         readonly string $audience,

@@ -26,10 +26,6 @@ class Verifier
      */
     public function verifyJwtAndGetClaims(VerifyRequest $verifyRequest): array
     {
-        if (!$verifyRequest->tokenString) {
-            throw new Exception('Token not provided', 401);
-        }
-
         try {
             // Parse the token header to retrieve the KID (Key ID)
             $parser = new Parser(new JoseEncoder());
@@ -93,20 +89,14 @@ class Verifier
      */
     protected function getPublicKeyFromJwks(string $jwksUrl, string $kid, ?CacheManager $cacheManager): Key
     {
-        $jwksData = null;
-
-        if ($cacheManager) {
-            $jwksData = $cacheManager->get();
-        }
+        $jwksData = $cacheManager?->get();
 
         if (!$jwksData) {
             $client = new Client();
             $response = $client->get($jwksUrl);
             $jwksData = json_decode($response->getBody()->getContents(), true);
 
-            if ($jwksData && $cacheManager) {
-                $cacheManager->set($jwksData);
-            }
+            $cacheManager?->set($jwksData);
         }
 
         if (!isset($jwksData['keys']) || !is_array($jwksData['keys'])) {
