@@ -3,18 +3,26 @@
 namespace ZTrippete\JwtVerifier;
 
 use DateTimeImmutable;
-use Exception;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\GuzzleException;
 use Lcobucci\JWT\Configuration;
 use Lcobucci\JWT\Encoding\JoseEncoder;
 use Lcobucci\JWT\Signer\Key;
 use Lcobucci\JWT\Token\Parser;
 use Lcobucci\JWT\Signer\Rsa\Sha256;
 use Lcobucci\JWT\Signer\Key\InMemory;
+use Lcobucci\JWT\Token\InvalidTokenStructure;
 use Lcobucci\JWT\Token\Plain;
+use Lcobucci\JWT\Token\UnsupportedHeaderFound;
 use Lcobucci\JWT\Validation\Constraint\IssuedBy;
 use Lcobucci\JWT\Validation\Constraint\PermittedFor;
 use Lcobucci\JWT\Validation\Constraint\SignedWith;
+use Lcobucci\JWT\Validation\RequiredConstraintsViolated;
+use ZTrippete\JwtVerifier\Exceptions\JwksFormatException;
+use ZTrippete\JwtVerifier\Exceptions\OAuthProviderException;
+use ZTrippete\JwtVerifier\Exceptions\TokenExpireException;
+use ZTrippete\JwtVerifier\Exceptions\TokenFormatException;
+use ZTrippete\JwtVerifier\Exceptions\TokenValidationException;
 
 class Verifier
 {
@@ -26,57 +34,61 @@ class Verifier
      */
     public function verifyJwtAndGetClaims(VerifyRequest $verifyRequest): array
     {
+        // Parse the token header to retrieve the KID (Key ID)
+        $parser = new Parser(new JoseEncoder());
         try {
-            // Parse the token header to retrieve the KID (Key ID)
-            $parser = new Parser(new JoseEncoder());
             $parsedToken = $parser->parse($verifyRequest->tokenString);
+        } catch (InvalidTokenStructure | UnsupportedHeaderFound $e) {
+            throw new TokenFormatException('Invalid token format: ' . $e->getMessage());
+        }
 
-            $kid = $parsedToken->headers()->get('kid');
+        $kid = $parsedToken->headers()->get('kid');
 
-            $publicKey = $this->getPublicKeyFromJwks(
-                $verifyRequest->jwksUrl,
-                $kid,
-                $verifyRequest->cacheManager
-            );
+        $publicKey = $this->getPublicKeyFromJwks(
+            $verifyRequest->jwksUrl,
+            $kid,
+            $verifyRequest->cacheManager
+        );
 
-            // Create the main configuration
-            $configuration = Configuration::forAsymmetricSigner(
-                new Sha256(),
-                $publicKey, // Expects a key even though we are not interested in it
-                $publicKey
-            );
+        // Create the main configuration
+        $configuration = Configuration::forAsymmetricSigner(
+            new Sha256(),
+            $publicKey, // Expects a key even though we are not interested in it
+            $publicKey
+        );
 
-            /** @var Plain */
-            $token = $configuration->parser()->parse($verifyRequest->tokenString);
+        /** @var Plain */
+        $token = $configuration->parser()->parse($verifyRequest->tokenString);
 
-            $constraints = [
-                // Verify that the token was issued by the configured OIDC server
-                new IssuedBy($verifyRequest->issuer),
-                // Verify that the token was signed by the configured OIDC server
-                new SignedWith($configuration->signer(), $configuration->verificationKey()),
-                // Verify that the token was issued for this application
-                new PermittedFor($verifyRequest->audience)
-            ];
+        $constraints = [
+            // Verify that the token was issued by the configured OIDC server
+            new IssuedBy($verifyRequest->issuer),
+            // Verify that the token was signed by the configured OIDC server
+            new SignedWith($configuration->signer(), $configuration->verificationKey()),
+            // Verify that the token was issued for this application
+            new PermittedFor($verifyRequest->audience)
+        ];
 
-            // Validate the token against all constraints
+        // Validate the token against all constraints
+        try {
             foreach ($constraints as $constraint) {
                 $configuration->validator()->assert($token, $constraint);
             }
-
-            // If all validations pass, the token is valid
-            $claims = $token->claims()->all();
-
-            $now = new DateTimeImmutable();
-
-            // Check that the token has not expired
-            if ($claims['exp'] <= $now) {
-                throw new Exception('Token expired', 401);
-            }
-
-            return $claims;
-        } catch (\Throwable $th) {
-            throw new Exception($th->getMessage(), 401);
+        } catch (RequiredConstraintsViolated $e) {
+            throw new TokenValidationException('Token validation failed: ' . $e->getMessage());
         }
+
+        // If all validations pass, the token is valid
+        $claims = $token->claims()->all();
+
+        $now = new DateTimeImmutable();
+
+        // Check that the token has not expired
+        if ($claims['exp'] <= $now) {
+            throw new TokenExpireException('Token expired');
+        }
+
+        return $claims;
     }
 
     /**
@@ -92,15 +104,19 @@ class Verifier
         $jwksData = $cacheManager?->get();
 
         if (!$jwksData) {
-            $client = new Client();
-            $response = $client->get($jwksUrl);
-            $jwksData = json_decode($response->getBody()->getContents(), true);
+            try {
+                $client = new Client();
+                $response = $client->get($jwksUrl);
+                $jwksData = json_decode($response->getBody()->getContents(), true);
+            } catch (GuzzleException $e) {
+                throw new OAuthProviderException('Error during fetch JWKS from provider:' . $e->getMessage());
+            }
 
             $cacheManager?->set($jwksData);
         }
 
         if (!isset($jwksData['keys']) || !is_array($jwksData['keys'])) {
-            throw new Exception('JWKS not valid or without key');
+            throw new JwksFormatException('JWKS not valid or without key');
         }
 
         $targetKey = null;
@@ -112,11 +128,11 @@ class Verifier
         }
 
         if (!$targetKey) {
-            throw new Exception('Public Key not found in JWKS for KID');
+            throw new JwksFormatException('Public Key not found in JWKS for KID');
         }
 
         if (!isset($targetKey['x5c'][0])) {
-            throw new Exception('Not supported JWKS format key');
+            throw new JwksFormatException('Not supported JWKS format key');
         }
 
         return InMemory::plainText(
