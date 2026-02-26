@@ -15,13 +15,35 @@ class CacheManager
         readonly Closure $cacheSet
     ) {}
 
-    public function get()
+    protected function get(string $key)
     {
-        return ($this->cacheGet)();
+        return ($this->cacheGet)($key);
     }
 
-    public function set(array $jwksData)
+    protected function set(string $key, array $jwksData)
     {
         return ($this->cacheSet)($jwksData);
+    }
+
+    /**
+     * Retrieve data from cache or use closure
+     *
+     * @param string $key
+     * @param Closure $valueResolver
+     * @return array
+     */
+    public function remember(string $key, Closure $valueResolver): array
+    {
+        $data = $this->get($key);
+
+        if ($data !== null) {
+            return $data;
+        }
+
+        $data = $valueResolver();
+
+        $this->set($key, $data);
+
+        return $data;
     }
 }
