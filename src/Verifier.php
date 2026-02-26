@@ -67,17 +67,13 @@ class Verifier
         /** @var Plain */
         $token = $configuration->parser()->parse($tokenString);
 
-        if (!$this->audience) {
-            $this->audience = $token->claims()->get('sub');
-        }
-
         $constraints = [
             // Verify that the token was issued by the configured OIDC server
             new IssuedBy($this->issuer),
             // Verify that the token was signed by the configured OIDC server
             new SignedWith($configuration->signer(), $configuration->verificationKey()),
             // Verify that the token was issued for this application
-            new PermittedFor($this->audience)
+            new PermittedFor($this->audience ?? $token->claims()->get('sub'))
         ];
 
         // Validate the token against all constraints
