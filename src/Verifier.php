@@ -27,7 +27,7 @@ use ZTrippete\JwtVerifier\Exceptions\TokenValidationException;
 /**
  * @param string $jwksUrl
  * @param string $issuer
- * @param string $audience
+ * @param string|null $audience = null
  * @param CacheManager|null $cacheManager = null
  */
 class Verifier
@@ -35,7 +35,7 @@ class Verifier
     public function __construct(
         readonly string $jwksUrl,
         readonly string $issuer,
-        readonly string $audience,
+        readonly ?string $audience = null,
         readonly ?CacheManager $cacheManager = null
     ) {}
 
@@ -66,6 +66,10 @@ class Verifier
 
         /** @var Plain */
         $token = $configuration->parser()->parse($tokenString);
+
+        if (!$this->audience) {
+            $this->audience = $token->claims()->get('sub');
+        }
 
         $constraints = [
             // Verify that the token was issued by the configured OIDC server
