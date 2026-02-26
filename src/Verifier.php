@@ -101,19 +101,17 @@ class Verifier
      */
     protected function getPublicKeyFromJwks(string $jwksUrl, string $kid, ?CacheManager $cacheManager): Key
     {
-        $jwksData = $cacheManager?->get();
-
-        if (!$jwksData) {
+        $fetchJwksData = function () use ($jwksUrl): array {
             try {
                 $client = new Client();
                 $response = $client->get($jwksUrl);
-                $jwksData = json_decode($response->getBody()->getContents(), true);
+                return json_decode($response->getBody()->getContents(), true);
             } catch (GuzzleException $e) {
                 throw new OAuthProviderException('Error during fetch JWKS from provider:' . $e->getMessage());
             }
+        };
 
-            $cacheManager?->set($jwksData);
-        }
+        $jwksData = $cacheManager ? $cacheManager->remember('oidc_jwks', $fetchJwksData) : $fetchJwksData();
 
         if (!isset($jwksData['keys']) || !is_array($jwksData['keys'])) {
             throw new JwksFormatException('JWKS not valid or without key');
