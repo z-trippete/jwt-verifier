@@ -24,10 +24,15 @@ use ZTrippete\JwtVerifier\Exceptions\TokenExpireException;
 use ZTrippete\JwtVerifier\Exceptions\TokenFormatException;
 use ZTrippete\JwtVerifier\Exceptions\TokenValidationException;
 
+/**
+ * @param string $jwksUrl
+ * @param string $issuer
+ * @param string $audience
+ * @param CacheManager|null $cacheManager = null
+ */
 class Verifier
 {
     public function __construct(
-        readonly string $tokenString,
         readonly string $jwksUrl,
         readonly string $issuer,
         readonly string $audience,
