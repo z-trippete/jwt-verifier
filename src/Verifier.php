@@ -2,7 +2,6 @@
 
 namespace ZTrippete\JwtVerifier;
 
-use Closure;
 use DateTimeImmutable;
 use Exception;
 use GuzzleHttp\Client;
@@ -17,36 +16,34 @@ use Lcobucci\JWT\Validation\Constraint\IssuedBy;
 use Lcobucci\JWT\Validation\Constraint\PermittedFor;
 use Lcobucci\JWT\Validation\Constraint\SignedWith;
 
-class JwtVerifier
+class Verifier
 {
     /**
      * This function validate token and return all claims
      *
-     * @param JwtVerifierDTO $jwtVerifierDTO
+     * @param VerifyRequest $verifyRequest
      * @return array
      */
-    public function validateJwtAndGetClaims(JwtVerifierDTO $jwtVerifierDTO): array
+    public function verifyJwtAndGetClaims(VerifyRequest $verifyRequest): array
     {
-        if (!$jwtVerifierDTO->tokenString) {
+        if (!$verifyRequest->tokenString) {
             throw new Exception('Token not provided', 401);
         }
 
         try {
             // Parse the token header to retrieve the KID (Key ID)
             $parser = new Parser(new JoseEncoder());
-            $parsedToken = $parser->parse($jwtVerifierDTO->tokenString);
+            $parsedToken = $parser->parse($verifyRequest->tokenString);
 
             $kid = $parsedToken->headers()->get('kid');
 
             $publicKey = $this->getPublicKeyFromJwks(
-                $jwtVerifierDTO->config['urlKey'],
+                $verifyRequest->jwksUrl,
                 $kid,
-                $jwtVerifierDTO->cacheSet,
-                $jwtVerifierDTO->cacheGet,
-                $jwtVerifierDTO->cacheKey
+                $verifyRequest->cacheManager
             );
 
-            // Creare la configurazione principale
+            // Create the main configuration
             $configuration = Configuration::forAsymmetricSigner(
                 new Sha256(),
                 $publicKey, // Expects a key even though we are not interested in it
@@ -54,15 +51,15 @@ class JwtVerifier
             );
 
             /** @var Plain */
-            $token = $configuration->parser()->parse($jwtVerifierDTO->tokenString);
+            $token = $configuration->parser()->parse($verifyRequest->tokenString);
 
             $constraints = [
                 // Verify that the token was issued by the configured OIDC server
-                new IssuedBy($jwtVerifierDTO->config['issuer']),
+                new IssuedBy($verifyRequest->issuer),
                 // Verify that the token was signed by the configured OIDC server
                 new SignedWith($configuration->signer(), $configuration->verificationKey()),
                 // Verify that the token was issued for this application
-                new PermittedFor($jwtVerifierDTO->config['audience'])
+                new PermittedFor($verifyRequest->audience)
             ];
 
             // Validate the token against all constraints
@@ -91,17 +88,15 @@ class JwtVerifier
      *
      * @param string $jwksUrl
      * @param string $kid
-     * @param Closure|null $cacheSet
-     * @param Closure|null $cacheGet
-     * @param string|null $cacheKey
+     * @param CacheManager|null $cacheManager
      * @return Key
      */
-    protected function getPublicKeyFromJwks(string $jwksUrl, string $kid, ?Closure $cacheSet, ?Closure $cacheGet, ?string $cacheKey): Key
+    protected function getPublicKeyFromJwks(string $jwksUrl, string $kid, ?CacheManager $cacheManager): Key
     {
         $jwksData = null;
 
-        if ($cacheGet && $cacheKey) {
-            $jwksData = $cacheGet($cacheKey);
+        if ($cacheManager) {
+            $jwksData = $cacheManager->get();
         }
 
         if (!$jwksData) {
@@ -109,8 +104,8 @@ class JwtVerifier
             $response = $client->get($jwksUrl);
             $jwksData = json_decode($response->getBody()->getContents(), true);
 
-            if ($cacheSet && $cacheKey && $jwksData) {
-                $cacheSet($cacheKey, $jwksData);
+            if ($jwksData && $cacheManager) {
+                $cacheManager->set($jwksData);
             }
         }
 

@@ -5,6 +5,7 @@ A simple and lightweight php class to verify JWT tokens using JWKS (JSON Web Key
 ## Features
 
 - **JWKS Support**: Automatically fetches public keys from a remote URL.
+- **Smart Caching**: Includes a flexible `CacheManager` to store JWKS data, reducing latency and avoiding rate-limiting from your Identity Provider.
 - **Claim Validation**: Verifies `iss` (Issuer), `aud` (Audience), and `exp` (Expiration).
 
 ## Requirements
