@@ -26,29 +26,31 @@ use ZTrippete\JwtVerifier\Exceptions\TokenValidationException;
 
 class Verifier
 {
+    public function __construct(
+        readonly string $tokenString,
+        readonly string $jwksUrl,
+        readonly string $issuer,
+        readonly string $audience,
+        readonly ?CacheManager $cacheManager = null
+    ) {}
+
     /**
      * This function validate token and return all claims
      *
-     * @param VerifyRequest $verifyRequest
+     * @param string $tokenString
      * @return array
      */
-    public function verifyJwtAndGetClaims(VerifyRequest $verifyRequest): array
+    public function verifyAndGetClaims(string $tokenString): array
     {
         // Parse the token header to retrieve the KID (Key ID)
         $parser = new Parser(new JoseEncoder());
         try {
-            $parsedToken = $parser->parse($verifyRequest->tokenString);
+            $parsedToken = $parser->parse($tokenString);
         } catch (InvalidTokenStructure | UnsupportedHeaderFound $e) {
             throw new TokenFormatException('Invalid token format: ' . $e->getMessage());
         }
 
-        $kid = $parsedToken->headers()->get('kid');
-
-        $publicKey = $this->getPublicKeyFromJwks(
-            $verifyRequest->jwksUrl,
-            $kid,
-            $verifyRequest->cacheManager
-        );
+        $publicKey = $this->getPublicKeyFromJwks($parsedToken->headers()->get('kid'));
 
         // Create the main configuration
         $configuration = Configuration::forAsymmetricSigner(
@@ -58,15 +60,15 @@ class Verifier
         );
 
         /** @var Plain */
-        $token = $configuration->parser()->parse($verifyRequest->tokenString);
+        $token = $configuration->parser()->parse($tokenString);
 
         $constraints = [
             // Verify that the token was issued by the configured OIDC server
-            new IssuedBy($verifyRequest->issuer),
+            new IssuedBy($this->issuer),
             // Verify that the token was signed by the configured OIDC server
             new SignedWith($configuration->signer(), $configuration->verificationKey()),
             // Verify that the token was issued for this application
-            new PermittedFor($verifyRequest->audience)
+            new PermittedFor($this->audience)
         ];
 
         // Validate the token against all constraints
@@ -99,19 +101,19 @@ class Verifier
      * @param CacheManager|null $cacheManager
      * @return Key
      */
-    protected function getPublicKeyFromJwks(string $jwksUrl, string $kid, ?CacheManager $cacheManager): Key
+    protected function getPublicKeyFromJwks(string $kid): Key
     {
-        $fetchJwksData = function () use ($jwksUrl): array {
+        $fetchJwksData = function (): array {
             try {
                 $client = new Client();
-                $response = $client->get($jwksUrl);
+                $response = $client->get($this->jwksUrl);
                 return json_decode($response->getBody()->getContents(), true);
             } catch (GuzzleException $e) {
                 throw new OAuthProviderException('Error during fetch JWKS from provider:' . $e->getMessage());
             }
         };
 
-        $jwksData = $cacheManager ? $cacheManager->remember('oidc_jwks', $fetchJwksData) : $fetchJwksData();
+        $jwksData = $this->cacheManager ? $this->cacheManager->remember('oidc_jwks', $fetchJwksData) : $fetchJwksData();
 
         if (!isset($jwksData['keys']) || !is_array($jwksData['keys'])) {
             throw new JwksFormatException('JWKS not valid or without key');
