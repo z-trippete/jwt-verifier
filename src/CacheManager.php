@@ -22,7 +22,7 @@ class CacheManager
 
     protected function set(string $key, array $jwksData)
     {
-        return ($this->cacheSet)($jwksData);
+        return ($this->cacheSet)($key, $jwksData);
     }
 
     /**
