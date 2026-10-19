@@ -2,12 +2,12 @@
 
 namespace ZTrippete\JwtVerifier\Exceptions;
 
-use Exception;
+use Throwable;
 
-class TokenValidationException extends Exception
+class TokenValidationException extends JwtVerifierException
 {
-    public function __construct(string $message = "")
+    public function __construct(string $message = "", ?Throwable $previous = null)
     {
-        parent::__construct($message);
+        parent::__construct($message, $previous);
     }
 }

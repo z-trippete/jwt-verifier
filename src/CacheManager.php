@@ -46,4 +46,20 @@ class CacheManager
 
         return $data;
     }
+
+    /**
+     * Resolve fresh data with the closure (ignoring the cached value) and overwrite the cache
+     *
+     * @param string $key
+     * @param Closure $valueResolver
+     * @return array
+     */
+    public function refresh(string $key, Closure $valueResolver): array
+    {
+        $data = $valueResolver();
+
+        $this->set($key, $data);
+
+        return $data;
+    }
 }
