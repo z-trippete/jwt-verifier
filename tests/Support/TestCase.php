@@ -77,8 +77,20 @@ abstract class TestCase extends BaseTestCase
             httpClient: $this->mockClient($httpQueue),
             leewaySeconds: $options['leewaySeconds'] ?? 0,
             requireTimeClaims: $options['requireTimeClaims'] ?? false,
-            clock: $this->clock()
+            clock: $this->clock(),
+            rawTimeClaims: $options['rawTimeClaims'] ?? false
         );
+    }
+
+    /**
+     * RS256-sign an arbitrary header/payload (for payloads the Builder refuses to produce)
+     */
+    protected function signedRawToken(RsaKey $key, array $header, array $payload): string
+    {
+        $signingInput = RsaKey::base64Url(json_encode($header)) . '.' . RsaKey::base64Url(json_encode($payload));
+        openssl_sign($signingInput, $signature, $key->privatePem, OPENSSL_ALGO_SHA256);
+
+        return $signingInput . '.' . RsaKey::base64Url($signature);
     }
 
     /**

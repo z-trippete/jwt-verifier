@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.0
+
+### Added
+- `VerificationOptions`: per-token checks passed as the optional second argument, `verifyAndGetClaims(string $tokenString, ?VerificationOptions $options = null)`. Every failed check throws `TokenValidationException`.
+  - `expectedType`: `typ` header check (RFC 9068 / RFC 7515). It is case-insensitive, accepts an optional `application/` prefix, and runs before any JWKS fetch.
+  - `expectedNonce` and `idToken`: OIDC ID token `nonce` and `azp` rules (OIDC Core 3.1.3.7).
+  - `requiredScopes`: `scope` given as a space-delimited string or as a list of strings, matched on whole tokens.
+  - `expectedClientId` (`client_id`, RFC 9068), `requireSubject` (non-blank `sub`) and `claimsEqualIfPresent` (e.g. OpenIddict `oi_prst`).
+  - These checks run only after signature, `iss`, `aud` and time validation, and compare claim values with `hash_equals`.
+- `rawTimeClaims` constructor option (trailing, default `false`): returns `exp`, `iat` and `nbf` as integer Unix timestamps.
+
+### Changed
+- Hardening: a token whose `aud` contains a non-string value is now rejected with `TokenValidationException`. This affects malformed tokens only.
+- Subclasses overriding `verifyAndGetClaims()` must add the new optional `$options` parameter to their signature.
+
 ## 2.3.0
 
 ### Added
