@@ -39,6 +39,7 @@ use ZTrippete\JwtVerifier\Exceptions\TokenValidationException;
  * @param int $leewaySeconds = 0 Clock skew tolerated on exp, nbf and iat
  * @param bool $requireTimeClaims = false Reject tokens without exp or iat
  * @param ClockInterface|null $clock = null Clock used for time-based claims (default: system clock)
+ * @param bool $rawTimeClaims = false Return exp, iat and nbf as integer Unix timestamps instead of DateTimeImmutable
  */
 class Verifier
 {
@@ -55,18 +56,21 @@ class Verifier
         readonly float $httpTimeoutSeconds = 10.0,
         readonly int $leewaySeconds = 0,
         readonly bool $requireTimeClaims = false,
-        readonly ?ClockInterface $clock = null
+        readonly ?ClockInterface $clock = null,
+        readonly bool $rawTimeClaims = false
     ) {}
 
     /**
      * This function validate token and return all claims
      *
      * @param string $tokenString
+     * @param VerificationOptions|null $options Optional per-token checks
      * @return array
      */
-    public function verifyAndGetClaims(string $tokenString): array
+    public function verifyAndGetClaims(string $tokenString, ?VerificationOptions $options = null): array
     {
-        $parser = new Parser(new JoseEncoder());
+        $encoder = new JoseEncoder();
+        $parser = new Parser($encoder);
         try {
             $token = $parser->parse($tokenString);
         } catch (JwtException $e) {
@@ -81,6 +85,12 @@ class Verifier
 
         if ($token->headers()->get('alg') !== self::SUPPORTED_ALGORITHM) {
             throw new TokenValidationException('Token validation failed: unsupported algorithm, expected ' . self::SUPPORTED_ALGORITHM);
+        }
+
+        if ($options?->expectedType !== null) {
+            // Read "typ" from the raw header: the parser defaults a missing "typ" to "JWT"
+            $rawHeader = $encoder->jsonDecode($encoder->base64UrlDecode(strstr($tokenString, '.', true)));
+            $this->assertExpectedType($rawHeader['typ'] ?? null, $options->expectedType);
         }
 
         $publicKey = $this->getPublicKeyFromJwks($kid);
@@ -109,10 +119,136 @@ class Verifier
             throw new TokenValidationException('Token validation failed: ' . $e->getMessage(), $e);
         }
 
+        foreach ($token->claims()->get(RegisteredClaims::AUDIENCE, []) as $value) {
+            if (!is_string($value)) {
+                throw new TokenValidationException('Token validation failed: "aud" must contain only strings');
+            }
+        }
+
         $this->assertTimeClaims($token);
 
+        if ($options !== null) {
+            $this->assertOptions($token, $options, $audience);
+        }
+
         // If all validations pass, the token is valid
-        return $token->claims()->all();
+        $claims = $token->claims()->all();
+
+        if ($this->rawTimeClaims) {
+            foreach ([RegisteredClaims::EXPIRATION_TIME, RegisteredClaims::ISSUED_AT, RegisteredClaims::NOT_BEFORE] as $name) {
+                if (isset($claims[$name]) && $claims[$name] instanceof DateTimeInterface) {
+                    $claims[$name] = $claims[$name]->getTimestamp();
+                }
+            }
+        }
+
+        return $claims;
+    }
+
+    /**
+     * "typ" header check (RFC 9068 / RFC 7515): case-insensitive, optional "application/" prefix
+     *
+     * @param mixed $type
+     * @param string $expectedType
+     * @return void
+     */
+    protected function assertExpectedType(mixed $type, string $expectedType): void
+    {
+        $normalize = fn(string $value): string => preg_replace('#^application/#', '', strtolower(trim($value)));
+
+        if (!is_string($type) || !hash_equals($normalize($expectedType), $normalize($type))) {
+            throw new TokenValidationException('Token validation failed: "typ" header is missing or not "' . $expectedType . '"');
+        }
+    }
+
+    /**
+     * Per-token checks, run after signature, iss, aud and time validation passed
+     *
+     * @param UnencryptedToken $token
+     * @param VerificationOptions $options
+     * @param string $audience The audience the token was validated against
+     * @return void
+     */
+    protected function assertOptions(UnencryptedToken $token, VerificationOptions $options, string $audience): void
+    {
+        $claims = $token->claims();
+
+        if ($options->expectedNonce !== null && !$this->claimEquals($claims->get('nonce'), $options->expectedNonce)) {
+            throw new TokenValidationException('Token validation failed: "nonce" claim is missing or does not match');
+        }
+
+        if ($options->idToken) {
+            // OIDC Core 3.1.3.7: azp is required with multiple audiences and must be our client when present
+            if (!$claims->has('azp')) {
+                if (count($claims->get(RegisteredClaims::AUDIENCE, [])) > 1) {
+                    throw new TokenValidationException('Token validation failed: "azp" claim is required when "aud" has multiple values');
+                }
+            } elseif (!$this->claimEquals($claims->get('azp'), $audience)) {
+                throw new TokenValidationException('Token validation failed: "azp" claim does not match the audience');
+            }
+        }
+
+        if ($options->requiredScopes !== []) {
+            $scopes = $this->scopes($claims->get('scope'));
+            if ($scopes === null) {
+                throw new TokenValidationException('Token validation failed: "scope" claim is missing or malformed');
+            }
+
+            $missing = array_values(array_diff($options->requiredScopes, $scopes));
+            if ($missing !== []) {
+                throw new TokenValidationException('Token validation failed: missing required scope(s) "' . implode('", "', $missing) . '"');
+            }
+        }
+
+        if ($options->expectedClientId !== null && !$this->claimEquals($claims->get('client_id'), $options->expectedClientId)) {
+            throw new TokenValidationException('Token validation failed: "client_id" claim is missing or does not match');
+        }
+
+        if ($options->requireSubject) {
+            $subject = $claims->get(RegisteredClaims::SUBJECT);
+            if (!is_string($subject) || trim($subject) === '') {
+                throw new TokenValidationException('Token validation failed: "sub" claim is missing or blank');
+            }
+        }
+
+        foreach ($options->claimsEqualIfPresent as $name => $expected) {
+            if ($claims->has($name) && !$this->claimEquals($claims->get($name), $expected)) {
+                throw new TokenValidationException('Token validation failed: "' . $name . '" claim does not match');
+            }
+        }
+    }
+
+    /**
+     * Constant-time comparison of a claim with an expected string
+     */
+    private function claimEquals(mixed $value, string $expected): bool
+    {
+        return is_string($value) && hash_equals($expected, $value);
+    }
+
+    /**
+     * Scopes from a space-delimited string or a list of (space-delimited) strings; null if missing or malformed
+     *
+     * @param mixed $scope
+     * @return list<string>|null
+     */
+    private function scopes(mixed $scope): ?array
+    {
+        $items = is_string($scope) ? [$scope] : $scope;
+
+        if (!is_array($items) || $items === [] || !array_is_list($items)) {
+            return null;
+        }
+
+        $scopes = [];
+        foreach ($items as $item) {
+            if (!is_string($item) || trim($item) === '') {
+                return null;
+            }
+            array_push($scopes, ...preg_split('/\s+/', trim($item)));
+        }
+
+        return $scopes;
     }
 
     /**

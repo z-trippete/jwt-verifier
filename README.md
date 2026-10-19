@@ -71,6 +71,7 @@ try {
 | `leewaySeconds` | `int` | `0` | Clock skew tolerated on `exp`, `nbf` and `iat`. |
 | `requireTimeClaims` | `bool` | `false` | When `true`, tokens without `exp` or `iat` are rejected with `TokenValidationException`. When `false`, a token **without `exp` is accepted** (it never expires) and a missing `iat` is ignored. |
 | `clock` | `?Psr\Clock\ClockInterface` | `null` | Clock used for time-based claims. Defaults to the system clock; inject one for deterministic tests. |
+| `rawTimeClaims` | `bool` | `false` | When `true`, the returned `exp`, `iat` and `nbf` are integer Unix timestamps instead of `DateTimeImmutable` objects. All other claims are unchanged. |
 
 The first four parameters keep their historical order. The new ones are optional: pass them as named arguments.
 
@@ -93,6 +94,50 @@ With a leeway of `L` seconds:
 - `exp <= now - L` → `TokenExpireException`
 - `nbf > now + L` → `TokenValidationException`
 - `iat > now + L` → `TokenValidationException`
+
+### Per-token verification options
+
+`verifyAndGetClaims()` accepts an optional `VerificationOptions` as second argument for the generic OAuth/OIDC checks. Every option is off by default. When a check fails, a `TokenValidationException` is thrown whose message names the check.
+
+The `typ` check runs together with the header checks, before any JWKS fetch. All the other checks run only after signature, `iss`, `aud` and time validation have passed. Claim values are compared with `hash_equals`.
+
+| Option | Type | Check |
+|---|---|---|
+| `expectedType` | `?string` | The `typ` header must be equal to it (RFC 9068 / RFC 7515). The comparison is case-insensitive and the `application/` prefix is optional: `at+jwt` == `application/at+jwt` == `AT+JWT`. A missing `typ` is rejected. |
+| `expectedNonce` | `?string` | The `nonce` claim must be a string equal to it. |
+| `idToken` | `bool` | OIDC Core 3.1.3.7 `azp` rules. Without `azp`, `aud` must contain at most one value. With `azp`, it must be equal to the configured audience (or `sub` when no audience is configured). |
+| `requiredScopes` | `list<string>` | Every listed scope must be in the `scope` claim, as a whole token (`step-up` does not match `step-up-extra`). `scope` may be a space-delimited string or a list of strings, and each item may itself be space-delimited. A missing claim, or any empty, blank or non-string item, is rejected. |
+| `expectedClientId` | `?string` | The `client_id` claim (RFC 9068) must be a string equal to it. |
+| `requireSubject` | `bool` | `sub` must be a non-blank string. |
+| `claimsEqualIfPresent` | `array<string, string>` | Each claim, if present, must be a string equal to the given value. An absent claim is accepted. |
+
+Access token for an API (e.g. OpenIddict):
+
+```php
+use ZTrippete\JwtVerifier\VerificationOptions;
+
+$claims = $verifier->verifyAndGetClaims($accessToken, new VerificationOptions(
+    expectedType: 'at+jwt',
+    requiredScopes: ['api'],
+    expectedClientId: $clientId,
+    requireSubject: true,
+    claimsEqualIfPresent: ['oi_prst' => $clientId], // OpenIddict presenter
+));
+```
+
+ID token:
+
+```php
+$claims = $verifier->verifyAndGetClaims($idToken, new VerificationOptions(
+    expectedNonce: $nonceFromSession,
+    idToken: true,
+    requireSubject: true,
+));
+```
+
+Invalid option values, such as a blank string, a scope containing spaces, or a non-string value in `claimsEqualIfPresent`, throw `InvalidArgumentException` when `VerificationOptions` is constructed.
+
+Checks that belong to your application stay in your code: expected subject, authorization based on claims, mapping exceptions to your domain, and building DTOs.
 
 ### Caching the JWKS
 
@@ -125,6 +170,11 @@ $verifier = new Verifier(
     httpClient: new Client(['timeout' => 3, 'proxy' => 'http://proxy.local:3128']),
 );
 ```
+
+## Upgrading to 2.4
+
+- Fully backward compatible: `verifyAndGetClaims($token)` without options accepts and rejects the same tokens and returns the same claims as 2.3. The one exception is a token whose `aud` contains a non-string value: it is now rejected with `TokenValidationException`.
+- If you extend `Verifier` and override `verifyAndGetClaims()`, add the new optional `?VerificationOptions $options = null` parameter to your override.
 
 ## Upgrading to 2.3
 
