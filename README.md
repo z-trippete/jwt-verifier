@@ -64,7 +64,7 @@ try {
 |---|---|---|---|
 | `jwksUrl` | `string` | — | URL of the provider's JWKS. |
 | `issuer` | `string` | — | Expected `iss` claim. |
-| `audience` | `?string` | `null` | Expected `aud` claim. When `null`, the token's `sub` claim is used as audience. |
+| `audience` | `string\|list<string>\|null` | `null` | Accepted audience(s). The token's `aud` must contain at least one of them. When `null`, the token's `sub` claim is used as audience. An empty list, an array that is not a list (string or non-sequential keys), or a blank or non-string item, throws `InvalidArgumentException`. A blank *string* audience is not rejected at construction, for compatibility with 2.4: an empty string fails every verification, a whitespace-only one matches only tokens issued for that exact value. |
 | `cacheManager` | `?CacheManager` | `null` | Cache for the JWKS. Without it, the JWKS is fetched on every verification. |
 | `httpClient` | `?GuzzleHttp\ClientInterface` | `null` | Client used to fetch the JWKS. When `null`, a `GuzzleHttp\Client` with `timeout` and `connect_timeout` set to `httpTimeoutSeconds` is created. |
 | `httpTimeoutSeconds` | `float` | `10.0` | Timeout of the default HTTP client (ignored when `httpClient` is given: configure your own client). |
@@ -87,6 +87,14 @@ $verifier = new Verifier(
 );
 ```
 
+### Multiple audiences
+
+To accept tokens issued for any of several audiences (e.g. during a client rename, or for an API reachable under two identifiers), pass a list:
+
+```php
+$verifier = new Verifier($jwksUrl, $issuer, ['core-api', 'core-api-legacy']);
+```
+
 ### Time-based claims
 
 With a leeway of `L` seconds:
@@ -105,7 +113,7 @@ The `typ` check runs together with the header checks, before any JWKS fetch. All
 |---|---|---|
 | `expectedType` | `?string` | The `typ` header must be equal to it (RFC 9068 / RFC 7515). The comparison is case-insensitive and the `application/` prefix is optional: `at+jwt` == `application/at+jwt` == `AT+JWT`. A missing `typ` is rejected. |
 | `expectedNonce` | `?string` | The `nonce` claim must be a string equal to it. |
-| `idToken` | `bool` | OIDC Core 3.1.3.7 `azp` rules. Without `azp`, `aud` must contain at most one value. With `azp`, it must be equal to the configured audience (or `sub` when no audience is configured). |
+| `idToken` | `bool` | OIDC Core 3.1.3.7 `azp` rules. Without `azp`, `aud` must contain at most one value. With `azp`, it must be equal to the configured audience, or to one of them when a list is configured (`sub` when no audience is configured), and it must be contained in the token's `aud`. |
 | `requiredScopes` | `list<string>` | Every listed scope must be in the `scope` claim, as a whole token (`step-up` does not match `step-up-extra`). `scope` may be a space-delimited string or a list of strings, and each item may itself be space-delimited. A missing claim, or any empty, blank or non-string item, is rejected. |
 | `expectedClientId` | `?string` | The `client_id` claim (RFC 9068) must be a string equal to it. |
 | `requireSubject` | `bool` | `sub` must be a non-blank string. |
@@ -170,6 +178,11 @@ $verifier = new Verifier(
     httpClient: new Client(['timeout' => 3, 'proxy' => 'http://proxy.local:3128']),
 );
 ```
+
+## Upgrading to 2.5
+
+- Backward compatible at runtime: a string or `null` audience accepts and rejects the same tokens as in 2.4.
+- The type of the public `$audience` property is now `string|array|null`. Code that reads it and passes it where a `?string` is expected may be flagged by static analysis (PHPStan, Psalm).
 
 ## Upgrading to 2.4
 

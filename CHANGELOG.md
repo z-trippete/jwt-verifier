@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.5.0
+
+### Added
+- The `audience` constructor parameter also accepts a list of strings: the token's `aud` must contain at least one of them. With `VerificationOptions::$idToken`, `azp` may be any of the configured audiences, provided it is also contained in the token's `aud`.
+- An empty audience list, an array that is not a list, or a blank or non-string item, throws `InvalidArgumentException` when the `Verifier` is constructed.
+
+### Changed
+- The type of the public `$audience` property is now `string|array|null`. A string or `null` audience behaves exactly as in 2.4.
+- The protected `assertOptions()` now receives the list of accepted audiences (`array $audiences`) instead of the single matched audience (`string $audience`). Subclasses overriding it must update their signature.
+
 ## 2.4.0
 
 ### Added
