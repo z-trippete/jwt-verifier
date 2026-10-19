@@ -8,6 +8,7 @@ use DateTimeInterface;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
+use InvalidArgumentException;
 use JsonException;
 use Lcobucci\JWT\Encoding\JoseEncoder;
 use Lcobucci\JWT\Exception as JwtException;
@@ -32,7 +33,7 @@ use ZTrippete\JwtVerifier\Exceptions\TokenValidationException;
 /**
  * @param string $jwksUrl
  * @param string $issuer
- * @param string|null $audience = null
+ * @param string|list<string>|null $audience = null Accepted audience(s): the token's aud must contain at least one of them
  * @param CacheManager|null $cacheManager = null
  * @param ClientInterface|null $httpClient = null Guzzle client used to fetch the JWKS (default: new Client with $httpTimeoutSeconds)
  * @param float $httpTimeoutSeconds = 10.0 Connect and request timeout of the default client
@@ -50,7 +51,7 @@ class Verifier
     public function __construct(
         readonly string $jwksUrl,
         readonly string $issuer,
-        readonly ?string $audience = null,
+        readonly string|array|null $audience = null,
         readonly ?CacheManager $cacheManager = null,
         readonly ?ClientInterface $httpClient = null,
         readonly float $httpTimeoutSeconds = 10.0,
@@ -58,7 +59,18 @@ class Verifier
         readonly bool $requireTimeClaims = false,
         readonly ?ClockInterface $clock = null,
         readonly bool $rawTimeClaims = false
-    ) {}
+    ) {
+        if (is_array($audience)) {
+            if ($audience === [] || !array_is_list($audience)) {
+                throw new InvalidArgumentException('$audience must be a non-empty list');
+            }
+            foreach ($audience as $value) {
+                if (!is_string($value) || trim($value) === '') {
+                    throw new InvalidArgumentException('$audience must be a string or a list of non-blank strings');
+                }
+            }
+        }
+    }
 
     /**
      * This function validate token and return all claims
@@ -95,9 +107,20 @@ class Verifier
 
         $publicKey = $this->getPublicKeyFromJwks($kid);
 
-        $audience = $this->audience ?? $token->claims()->get('sub');
-        if (!is_string($audience) || $audience === '') {
+        // Accepted audiences, always as a list: the configured one(s), or the token's "sub" when none is configured
+        $audiences = is_array($this->audience) ? $this->audience : [$this->audience ?? $token->claims()->get('sub')];
+        if (!is_string($audiences[0]) || $audiences[0] === '') {
             throw new TokenValidationException('Token validation failed: no audience configured and token has no "sub" claim');
+        }
+
+        // Validate against the first accepted audience the token is issued for
+        // (or the first one, so PermittedFor reports the usual violation when none matches)
+        $audience = $audiences[0];
+        foreach ($audiences as $candidate) {
+            if ($token->isPermittedFor($candidate)) {
+                $audience = $candidate;
+                break;
+            }
         }
 
         $constraints = [
@@ -128,7 +151,7 @@ class Verifier
         $this->assertTimeClaims($token);
 
         if ($options !== null) {
-            $this->assertOptions($token, $options, $audience);
+            $this->assertOptions($token, $options, $audiences);
         }
 
         // If all validations pass, the token is valid
@@ -166,10 +189,10 @@ class Verifier
      *
      * @param UnencryptedToken $token
      * @param VerificationOptions $options
-     * @param string $audience The audience the token was validated against
+     * @param list<string> $audiences The accepted audiences (the configured ones, or the token's "sub")
      * @return void
      */
-    protected function assertOptions(UnencryptedToken $token, VerificationOptions $options, string $audience): void
+    protected function assertOptions(UnencryptedToken $token, VerificationOptions $options, array $audiences): void
     {
         $claims = $token->claims();
 
@@ -183,8 +206,15 @@ class Verifier
                 if (count($claims->get(RegisteredClaims::AUDIENCE, [])) > 1) {
                     throw new TokenValidationException('Token validation failed: "azp" claim is required when "aud" has multiple values');
                 }
-            } elseif (!$this->claimEquals($claims->get('azp'), $audience)) {
-                throw new TokenValidationException('Token validation failed: "azp" claim does not match the audience');
+            } else {
+                $azp = $claims->get('azp');
+                if (!is_string($azp) || !in_array($azp, $audiences, true)) {
+                    throw new TokenValidationException('Token validation failed: "azp" claim does not match the audience');
+                }
+                // With a list of audiences, azp may be a configured audience the token was not issued for
+                if (!$token->isPermittedFor($azp)) {
+                    throw new TokenValidationException('Token validation failed: "azp" claim is not contained in "aud"');
+                }
             }
         }
 
